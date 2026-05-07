@@ -21,6 +21,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from models.base import Base
+from dotenv import load_dotenv
+
+load_dotenv()
 
 log = logging.getLogger(__name__)
 

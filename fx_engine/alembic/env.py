@@ -13,6 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import Base AND all models so SQLAlchemy sees every table
 from models import Base  # noqa: E402
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Alembic config
 config = context.config
