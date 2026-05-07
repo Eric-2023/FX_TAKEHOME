@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: fx_user
       POSTGRES_PASSWORD: fx_pass
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +22,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://fx_user:fx_pass@db:5432/fx_engine
+      DATABASE_URL: postgresql://fx_user:fx_pass@db:5433/fx_engine
     depends_on:
       db:
         condition: service_healthy
