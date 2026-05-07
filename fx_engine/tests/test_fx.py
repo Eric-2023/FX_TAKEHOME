@@ -317,3 +317,72 @@ def test_cross_pair_routes_through_usd(service):
 def test_unsupported_pair_raises(service):
     with pytest.raises(ValueError, match="no rate path"):
         service._effective_rate("KES", "XYZ")
+
+# ── Property-based tests (Hypothesis) ────────────────────────────────
+
+from hypothesis import given, settings, assume, HealthCheck
+from hypothesis import strategies as st
+
+# Strategy: valid positive Decimal amounts with 2dp
+valid_amounts = st.decimals(
+    min_value="0.01",
+    max_value="1000.00",
+    places=2,
+    allow_nan=False,
+    allow_infinity=False,
+)
+
+# Strategy: valid currency pairs (distinct)
+currency_pairs = st.tuples(
+    st.sampled_from(["USD", "EUR", "KES", "NGN"]),
+    st.sampled_from(["USD", "EUR", "KES", "NGN"]),
+).filter(lambda pair: pair[0] != pair[1])
+
+
+@given(amount=valid_amounts)
+@settings(max_examples=20, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_hypothesis_final_amount_always_positive(amount, service):
+    """For any valid amount, final_amount must be > 0."""
+    quote = service.generate_quote(CUSTOMER_ID, "USD", "KES", amount)
+    assert quote.final_amount > 0
+
+
+@given(amount=valid_amounts)
+@settings(max_examples=20, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_hypothesis_final_amount_equals_amount_times_rate(amount, service):
+    """final_amount must equal amount * rate rounded to 2dp — no float errors."""
+    quote = service.generate_quote(CUSTOMER_ID, "USD", "KES", amount)
+    expected = (amount * quote.rate).quantize(Decimal("0.01"))
+    assert quote.final_amount == expected
+
+
+@given(pair=currency_pairs, amount=valid_amounts)
+@settings(max_examples=20, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_hypothesis_all_pairs_generate_quote(pair, amount, service):
+    """All valid currency pairs must produce a quote without raising."""
+    from_ccy, to_ccy = pair
+    try:
+        quote = service.generate_quote(CUSTOMER_ID, from_ccy, to_ccy, amount)
+        assert quote.final_amount > 0
+        assert quote.from_currency == from_ccy
+        assert quote.to_currency == to_ccy
+    except ValueError as e:
+        # Small amounts may convert to zero minor units — valid rejection
+        assert "too small" in str(e)
+
+
+@given(amount=valid_amounts)
+@settings(max_examples=10, deadline=5000, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_hypothesis_execute_debits_exact_amount(amount, service):
+    """Execute must debit exactly the quoted amount — no more, no less."""
+    service.credit_balance(CUSTOMER_ID, "USD", Decimal("2000.00"))
+    balances_before = service.get_balances(CUSTOMER_ID)
+    usd_before = Decimal(balances_before["USD"])
+
+    quote = service.generate_quote(CUSTOMER_ID, "USD", "KES", amount)
+    service.execute_quote(quote.id, CUSTOMER_ID)
+
+    balances_after = service.get_balances(CUSTOMER_ID)
+    usd_after = Decimal(balances_after["USD"])
+
+    assert usd_before - usd_after == amount

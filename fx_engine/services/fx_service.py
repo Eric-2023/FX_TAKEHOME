@@ -150,6 +150,11 @@ class FXService:
         # Pure Decimal arithmetic — quantize only at final step
         rate = self._effective_rate(from_ccy, to_ccy)
         final_amount = quantize(amount * rate)
+        if final_amount <= 0:
+            raise ValueError(
+                f"amount too small — {amount} {from_ccy} converts to less than "
+                f"one minor unit in {to_ccy}"
+            )
 
         now = datetime.now(timezone.utc)
         quote = Quote(
