@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from db import get_db, reset_db
+from db import get_db
 from models import Balance, Quote
 from services import FXService, RateService
 
@@ -40,10 +40,13 @@ CURRENCIES = ["USD", "EUR", "KES", "NGN"]
 
 @pytest.fixture(autouse=True)
 def fresh_db():
-    """Reset DB and seed test customer before each test."""
-    reset_db()
+    """Truncate data and seed test customer before each test."""
     from models import Customer
+    from sqlalchemy import text
     with get_db() as session:
+        # Truncate all tables in correct order (FK constraints)
+        session.execute(text("TRUNCATE TABLE idempotency, transactions, quotes, balances, customers RESTART IDENTITY CASCADE"))
+        session.flush()
         customer = Customer(
             id=CUSTOMER_ID,
             name="Test User",
