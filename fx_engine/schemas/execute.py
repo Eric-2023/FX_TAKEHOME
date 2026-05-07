@@ -1,10 +1,12 @@
 """Execute request and response schemas."""
 from __future__ import annotations
+from typing import Optional
 from pydantic import BaseModel
 
 
 class ExecuteRequest(BaseModel):
     customer_id: str
+    idempotency_key: Optional[str] = None
 
 
 class ExecuteResponse(BaseModel):
