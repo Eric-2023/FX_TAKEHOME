@@ -4,15 +4,15 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: fx_engine
-      POSTGRES_USER: fx_user
-      POSTGRES_PASSWORD: fx_pass
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fx_user -d fx_engine"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -22,7 +22,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://fx_user:fx_pass@db:5435/fx_engine
+      DATABASE_URL: ${DATABASE_URL}
+      EXCHANGERATES_API_KEY: ${EXCHANGERATES_API_KEY}
     depends_on:
       db:
         condition: service_healthy
