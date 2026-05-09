@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
+from metrics import RATE_REFRESHES, RATE_REFRESH_FAILURES, RATES_STALE
 
 load_dotenv()
 
@@ -44,7 +45,6 @@ SUPPORTED = {"USD", "EUR", "KES", "NGN"}
 
 
 def _with_spread(mid: Decimal) -> Dict[str, Decimal]:
-    """Derive buy/sell rates from a mid-rate."""
     return {
         "buy":  mid * (Decimal("1") - SPREAD_PCT),
         "sell": mid * (Decimal("1") + SPREAD_PCT),
@@ -130,11 +130,15 @@ class RateService:
                 "rates_refreshed source=exchangeratesapi.io pairs=%d",
                 len(new_rates),
             )
+            RATE_REFRESHES.inc()
+            RATES_STALE.set(0)
         except Exception as exc:
             log.error(
                 "rate_refresh_failed age=%ds error=%s — serving last known rates",
                 self._age_seconds(), exc,
             )
+            RATE_REFRESH_FAILURES.inc()
+            RATES_STALE.set(1 if self.is_stale() else 0)
 
     def get(self, pair: str) -> Optional[Dict[str, Decimal]]:
         """Return buy/sell rates for a pair, or None if not found."""

@@ -17,12 +17,15 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select, update
-
 from db import get_db
 from models import Customer, Balance, Quote, Transaction, Idempotency
 from services.rate_service import RateService
-from utils.decimal_utils import quantize, to_decimal
+from utils.decimal_utils import quantize
+from metrics import (
+    QUOTES_GENERATED,
+    QUOTES_EXECUTED,
+    IDEMPOTENT_HITS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,25 @@ class FXService:
 
         log.info("customer_created id=%s cid=%s", customer.id, cid)
         return customer
+
+    def list_customers(self) -> list:
+        """Return all customers."""
+        with get_db() as session:
+            customers = session.query(Customer).all()
+            for c in customers:
+                session.expunge(c)
+            return customers
+
+    def get_customer(self, customer_id: str) -> Customer:
+        """Return a single customer by ID."""
+        with get_db() as session:
+            customer = session.query(Customer).filter(
+                Customer.id == customer_id
+            ).first()
+            if customer is None:
+                raise ValueError(f"customer {customer_id} not found")
+            session.expunge(customer)
+            return customer
 
     def get_balances(self, customer_id: str) -> dict:
         """Return all currency balances for a customer."""
@@ -182,7 +204,30 @@ class FXService:
             quote.id, customer_id, from_ccy, to_ccy,
             amount, rate, final_amount, cid,
         )
+        QUOTES_GENERATED.inc()
         return quote
+
+    def list_quotes(self, customer_id: Optional[str] = None) -> list:
+        """Return all quotes, optionally filtered by customer_id."""
+        with get_db() as session:
+            query = session.query(Quote)
+            if customer_id:
+                query = query.filter(Quote.customer_id == customer_id)
+            quotes = query.order_by(Quote.created_at.desc()).all()
+            for q in quotes:
+                session.expunge(q)
+            return quotes
+
+    def get_quote(self, quote_id: str) -> Quote:
+        """Return a single quote by ID."""
+        with get_db() as session:
+            quote = session.query(Quote).filter(
+                Quote.id == quote_id
+            ).first()
+            if quote is None:
+                raise ValueError(f"quote {quote_id} not found")
+            session.expunge(quote)
+            return quote
 
     def execute_quote(
         self,
@@ -220,6 +265,7 @@ class FXService:
                     log.info(
                         "idempotent_hit key=%s cid=%s", idempotency_key, cid
                     )
+                    IDEMPOTENT_HITS.inc()
                     return json.loads(cached.response)
 
             # ── Step 2: Lock quote row for update ────────────────────
@@ -312,7 +358,30 @@ class FXService:
             tx_id, quote_id, customer_id,
             from_ccy, to_ccy, amount, final_amount, cid,
         )
+        QUOTES_EXECUTED.inc()
         return response
+
+    def list_transactions(self, customer_id: Optional[str] = None) -> list:
+        """Return all transactions, optionally filtered by customer_id."""
+        with get_db() as session:
+            query = session.query(Transaction)
+            if customer_id:
+                query = query.filter(Transaction.customer_id == customer_id)
+            transactions = query.order_by(Transaction.executed_at.desc()).all()
+            for t in transactions:
+                session.expunge(t)
+            return transactions
+
+    def get_transaction(self, transaction_id: str) -> Transaction:
+        """Return a single transaction by ID."""
+        with get_db() as session:
+            transaction = session.query(Transaction).filter(
+                Transaction.id == transaction_id
+            ).first()
+            if transaction is None:
+                raise ValueError(f"transaction {transaction_id} not found")
+            session.expunge(transaction)
+            return transaction
 
     # ── Rate routing ─────────────────────────────────────────────────
 
