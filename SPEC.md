@@ -61,12 +61,15 @@ final_amount, expires_at
 - Quote valid for exactly 60 seconds from created_at
 - Rate is locked at quote generation time — execution must honour it
 - Quote stored in DB immediately on generation
+- Amount must produce at least one minor unit in destination currency
+  after applying rate and rounding — rejected otherwise
 
 **Error semantics:**
 - 400 if amount ≤ 0
 - 400 if currencies are the same
 - 400 if currency not supported
 - 400 if no rate path exists for the pair
+- 400 if converted amount rounds to zero minor units
 
 ### 2. Execute quote
 **Input:** quote_id, customer_id, optional Idempotency-Key header
@@ -101,6 +104,8 @@ amount, final_amount, rate, executed_at
 - Seed rates used as fallback on startup if live fetch fails
 - Log the failure with timestamp and last_updated age
 - If last_updated is older than 1 hour, `stale: true` in /rates response
+- HTTP 429 (rate limit exceeded) handled same as network failure —
+  seed rates served, failure counted in Prometheus
 
 ### 4. Customer balances
 **Operations:** create customer, view balances per currency, credit
@@ -129,19 +134,27 @@ balance (test fixture only — not a production endpoint)
 - Correlation/trace ID attached to every request via X-Request-Id header
   or auto-generated UUID
 - Structured log lines include: event, quote_id or tx_id, cid, amounts
+- Logs written to terminal and fx_engine.log file simultaneously
 - `/healthz` returns DB connectivity status and rate staleness
-- Structured logs serve as observability — all key events logged with cid
+- `/metrics` exposes Prometheus counters:
+  - fx_quotes_generated_total
+  - fx_quotes_executed_total
+  - fx_idempotent_hits_total
+  - fx_rate_refreshes_total
+  - fx_rate_refresh_failures_total
+  - fx_rates_stale (gauge)
 
 ---
 
 ## Out of scope
 
 - Authentication and authorisation
-- /metrics endpoint (Prometheus)
 - Multi-tenancy
+- APScheduler for background rate refresh
 - Rate limiting on execute endpoint
 - FX margin/profit tracking
 - Regulatory reporting
+- Pagination on list endpoints
 
 ---
 
@@ -154,21 +167,18 @@ decisions and documented them here — as the brief requested.
 The brief says "e.g. exchangeratesapi.io" — I treated this as a
 suggestion not a requirement. The free tier of exchangeratesapi.io uses
 EUR as the base currency, not USD. I derived all pairs from EUR base
-rates and documented the routing rule. I also used open.er-api.com as a
-fallback reference during development since it requires no API key.
+rates and documented the routing rule.
 
 ### Cross-pair routing
 The brief says "route through USD or EUR" but doesn't specify which.
 I chose EUR as the primary intermediate since exchangeratesapi.io uses
 EUR as base — this avoids an extra division step and reduces rounding
-error. All cross pairs (KES/NGN, NGN/KES) route via EUR. Documented
-in the routing section above.
+error. All cross pairs (KES/NGN, NGN/KES) route via EUR.
 
 ### Spread model
 The brief says "rates include buy/sell spreads" but doesn't specify
 the spread size. I chose 50 basis points (0.5%) each side — a
-realistic retail FX spread for African markets. Documented in
-SPEC.md and applied consistently across all pairs.
+realistic retail FX spread for African markets.
 
 ### Idempotency mechanism
 The brief says "client retries with the same idempotency key" but
@@ -182,8 +192,7 @@ During property-based testing (Hypothesis), I discovered that very
 small amounts (e.g. 0.01 KES → USD) produce a final_amount of 0.00
 after rounding. Rather than silently accepting this, I added a
 validation that rejects amounts too small to produce at least one
-minor unit in the destination currency. This is the correct
-production behaviour — a bank would reject such a transaction.
+minor unit in the destination currency.
 
 ### Customer ID format
 The brief doesn't specify customer ID format. I used UUID v4 —
