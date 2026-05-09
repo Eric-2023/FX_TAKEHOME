@@ -12,6 +12,24 @@ log = logging.getLogger(__name__)
 def create_quotes_router(fx_service: FXService) -> APIRouter:
     router = APIRouter(prefix="/quotes", tags=["quotes"])
 
+    @router.get("")
+    def list_quotes(customer_id: Optional[str] = None):
+        """List all quotes, optionally filtered by customer_id."""
+        try:
+            quotes = fx_service.list_quotes(customer_id=customer_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return [q.to_dict() for q in quotes]
+
+    @router.get("/{quote_id}")
+    def get_quote(quote_id: str):
+        """Get a single quote by ID."""
+        try:
+            quote = fx_service.get_quote(quote_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return quote.to_dict()
+
     @router.post("", status_code=201, response_model=QuoteResponse)
     def create_quote(body: QuoteRequest, request: Request):
         """

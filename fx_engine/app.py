@@ -24,6 +24,7 @@ from routes import (
     create_quotes_router,
     create_rates_router,
     create_metrics_router,
+    create_transactions_router,
 )
 
 # ── Logging — terminal + file ─────────────────────────────────────────
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(create_customers_router(fx_service))
     app.include_router(create_quotes_router(fx_service))
     app.include_router(create_rates_router(rate_service))
+    app.include_router(create_transactions_router(fx_service))
     app.include_router(create_metrics_router())
 
     # ── Initialise DB on startup ─────────────────────────────────────

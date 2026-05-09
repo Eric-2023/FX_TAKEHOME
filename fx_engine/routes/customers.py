@@ -11,6 +11,24 @@ log = logging.getLogger(__name__)
 def create_customers_router(fx_service: FXService) -> APIRouter:
     router = APIRouter(prefix="/customers", tags=["customers"])
 
+    @router.get("")
+    def list_customers():
+        """List all customers."""
+        try:
+            customers = fx_service.list_customers()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return [c.to_dict() for c in customers]
+
+    @router.get("/{customer_id}", response_model=CustomerResponse)
+    def get_customer(customer_id: str):
+        """Get a single customer by ID."""
+        try:
+            customer = fx_service.get_customer(customer_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return customer.to_dict()
+
     @router.post("", status_code=201, response_model=CustomerResponse)
     def create_customer(body: CustomerRequest, request: Request):
         """Create a new customer with zero balances in all currencies."""
