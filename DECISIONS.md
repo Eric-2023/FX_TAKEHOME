@@ -25,6 +25,13 @@ senior Python engineers at fintech companies actually use:
   column in production means `alembic revision --autogenerate` then
   `alembic upgrade head` — not recreating tables and losing data.
 
+### Docker for local development and production parity
+PostgreSQL runs in Docker — same image, same version (16), same config
+locally and in production. docker-compose.yml includes a healthcheck so
+the API never starts before the DB is ready. Port mapped to 5435 to avoid
+conflicts with any local PostgreSQL instance. Credentials loaded from .env
+via ${VAR} substitution — no hardcoded secrets in docker-compose.yml.
+
 ### Layered architecture
 ```
 app.py → routes/ → services/ → models/ + utils/ + db.py
