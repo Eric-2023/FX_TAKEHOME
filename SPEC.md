@@ -142,3 +142,57 @@ balance (test fixture only — not a production endpoint)
 - Rate limiting on execute endpoint
 - FX margin/profit tracking
 - Regulatory reporting
+
+---
+
+## Assumptions and ambiguity decisions
+
+The brief left several areas open. Rather than asking, I made explicit
+decisions and documented them here — as the brief requested.
+
+### Rate source
+The brief says "e.g. exchangeratesapi.io" — I treated this as a
+suggestion not a requirement. The free tier of exchangeratesapi.io uses
+EUR as the base currency, not USD. I derived all pairs from EUR base
+rates and documented the routing rule. I also used open.er-api.com as a
+fallback reference during development since it requires no API key.
+
+### Cross-pair routing
+The brief says "route through USD or EUR" but doesn't specify which.
+I chose EUR as the primary intermediate since exchangeratesapi.io uses
+EUR as base — this avoids an extra division step and reduces rounding
+error. All cross pairs (KES/NGN, NGN/KES) route via EUR. Documented
+in the routing section above.
+
+### Spread model
+The brief says "rates include buy/sell spreads" but doesn't specify
+the spread size. I chose 50 basis points (0.5%) each side — a
+realistic retail FX spread for African markets. Documented in
+SPEC.md and applied consistently across all pairs.
+
+### Idempotency mechanism
+The brief says "client retries with the same idempotency key" but
+doesn't specify how the key is passed. I used the `Idempotency-Key`
+request header — the industry standard (used by Stripe, M-Pesa, etc.).
+This is more RESTful than a body field since idempotency is a
+request property not a business entity.
+
+### Minimum amount validation
+During property-based testing (Hypothesis), I discovered that very
+small amounts (e.g. 0.01 KES → USD) produce a final_amount of 0.00
+after rounding. Rather than silently accepting this, I added a
+validation that rejects amounts too small to produce at least one
+minor unit in the destination currency. This is the correct
+production behaviour — a bank would reject such a transaction.
+
+### Customer ID format
+The brief doesn't specify customer ID format. I used UUID v4 —
+globally unique, no sequential enumeration risk, standard for
+financial APIs.
+
+### Balance initialisation
+The brief says "create a customer" but doesn't specify whether
+balances should be pre-created. I initialise zero balances for all
+4 currencies on customer creation — this simplifies execute (no
+need to create balance rows on first trade) and makes balance
+queries consistent from day one.
