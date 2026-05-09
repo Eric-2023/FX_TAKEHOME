@@ -3,7 +3,7 @@
 Production-grade foreign exchange engine for USD, EUR, KES, and NGN
 with per-customer balance accounts.
 
-**Stack:** FastAPI · PostgreSQL · SQLAlchemy ORM · Alembic · Pydantic v2
+**Stack:** FastAPI · PostgreSQL · SQLAlchemy ORM · Alembic · Pydantic v2 · Prometheus . Docker
 
 ---
 
@@ -11,42 +11,47 @@ with per-customer balance accounts.
 
 ```
 FX_TAKEHOME/
-├── fx_engine/           ← the engine (all source code here)
-│   ├── models/          ← SQLAlchemy ORM models
+├── fx_engine/                  ← the engine (all source code here)
+│   ├── models/                 ← SQLAlchemy ORM models
 │   │   ├── base.py
 │   │   ├── customer.py
 │   │   ├── balance.py
 │   │   ├── quote.py
 │   │   ├── transaction.py
 │   │   └── idempotency.py
-│   ├── schemas/         ← Pydantic request/response validation
+│   ├── schemas/                ← Pydantic request/response validation
 │   │   ├── customer.py
 │   │   ├── quote.py
 │   │   └── execute.py
-│   ├── services/        ← business logic (no HTTP knowledge)
+│   ├── services/               ← business logic (no HTTP knowledge)
 │   │   ├── fx_service.py
 │   │   └── rate_service.py
-│   ├── routes/          ← HTTP handlers
-│   │   ├── health.py
-│   │   ├── customers.py
-│   │   ├── quotes.py
-│   │   └── rates.py
+│   ├── routes/                 ← HTTP handlers
+│   │   ├── health.py           ← GET /healthz
+│   │   ├── customers.py        ← GET|POST /customers
+│   │   ├── quotes.py           ← GET|POST /quotes
+│   │   ├── rates.py            ← GET /rates, POST /rates/refresh
+│   │   ├── transactions.py     ← GET /transactions
+│   │   └── metrics.py          ← GET /metrics (Prometheus)
 │   ├── utils/
-│   │   └── decimal_utils.py
+│   │   └── decimal_utils.py    ← centralised rounding
 │   ├── tests/
-│   │   └── test_fx.py
-│   ├── alembic/
-│   ├── db.py
-│   ├── app.py
+│   │   └── test_fx.py          ← 30 tests
+│   ├── alembic/                ← database migrations
+│   ├── metrics.py              ← Prometheus counters (standalone)
+│   ├── db.py                   ← SQLAlchemy engine + session manager
+│   ├── app.py                  ← FastAPI app factory
+│   ├── alembic.ini
 │   ├── docker-compose.yml
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── .env.example
-├── planted_bugs/        ← Umba's provided code — untouched
-├── REVIEW.md            ← code review of planted_bugs
-├── SPEC.md              ← technical spec written before coding
-├── DECISIONS.md         ← architecture decisions and AI usage
-└── CLAUDE.md            ← instructions given to the AI agent
+│   ├── .env.example
+│   └── postman_collection.json ← ready-to-run Postman collection
+├── planted_bugs/               ← Umba's provided code — untouched
+├── REVIEW.md                   ← code review of planted_bugs
+├── SPEC.md                     ← technical spec written before coding
+├── DECISIONS.md                ← architecture decisions and AI usage
+└── CLAUDE.md                   ← instructions given to the AI agent
 ```
 
 ---
@@ -110,7 +115,17 @@ alembic upgrade head
 pytest tests/ -v
 ```
 
-Expected output: **26 passed**
+Expected output: **30 passed**
+
+Tests cover:
+- Customer creation and balance management
+- Quote generation and validation
+- Quote execution — balance updates, quoted rate honoured
+- Concurrency — 10-thread test, exactly 1 execution per quote
+- Idempotency — retries with same key never double-debit
+- Atomicity — insufficient balance rolls back both legs
+- Decimal precision — Hypothesis property-based tests over random amounts
+- Rate routing — direct, inverse, and cross pairs
 
 ---
 
@@ -119,11 +134,18 @@ Expected output: **26 passed**
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /healthz | DB connectivity + rate staleness |
+| GET | /metrics | Prometheus metrics |
 | POST | /customers | Create customer |
+| GET | /customers | List all customers |
+| GET | /customers/{id} | Get single customer |
 | GET | /customers/{id}/balances | View all currency balances |
 | POST | /customers/{id}/credit | Credit balance (test fixture) |
 | POST | /quotes | Generate FX quote (60s TTL, locked rate) |
+| GET | /quotes | List all quotes (filter by ?customer_id=) |
+| GET | /quotes/{id} | Get single quote |
 | POST | /quotes/{id}/execute | Execute quote atomically |
+| GET | /transactions | List all transactions (filter by ?customer_id=) |
+| GET | /transactions/{id} | Get single transaction |
 | GET | /rates | Current buy/sell rates for all pairs |
 | POST | /rates/refresh | Refresh rates from exchangeratesapi.io |
 | GET | /docs | Swagger UI — interactive testing |
@@ -165,6 +187,12 @@ curl -X POST http://localhost:8000/quotes/{quote_id}/execute \
 
 # 7. Verify balances — USD dropped once, KES credited once
 curl http://localhost:8000/customers/{customer_id}/balances
+
+# 8. List all transactions
+curl http://localhost:8000/transactions
+
+# 9. Check Prometheus metrics
+curl http://localhost:8000/metrics | grep fx_
 ```
 
 ---
@@ -172,60 +200,76 @@ curl http://localhost:8000/customers/{customer_id}/balances
 ## Example Log Output
 
 ```
-2026-05-07 10:23:11 INFO fx_service quote_generated quote_id=q-456 customer=abc-123 USD->KES amount=100 rate=129.7957042197 final=12979.57 cid=req-xyz
-2026-05-07 10:23:15 INFO fx_service quote_executed tx_id=tx-789 quote_id=q-456 customer=abc-123 USD->KES amount=100 final=12979.57 cid=req-xyz
-2026-05-07 10:23:15 INFO fx_service idempotent_hit key=my-key-001 cid=req-abc
+2026-05-09 03:12:35,087 INFO fx_service customer_created id=a79d0eef cid=req-001
+2026-05-09 03:16:08,271 INFO fx_service quote_generated quote_id=a868a91d customer=a79d0eef USD->KES amount=100 rate=130.1475000000 final=13014.75 cid=req-002
+2026-05-09 03:16:24,459 INFO fx_service quote_executed tx_id=0c0c71e6 quote_id=a868a91d customer=a79d0eef USD->KES amount=100 final=13014.75 cid=req-003
+2026-05-09 03:16:31,112 INFO fx_service idempotent_hit key=my-key-001 cid=req-004
+2026-05-09 03:01:13,558 ERROR fx_service rate_refresh_failed age=0s error=HTTP Error 429: Too Many Requests — serving last known rates
 ```
+
+Logs are written to both terminal and `fx_engine.log` file.
+
+---
+
+## Postman Collection
+
+Import `fx_engine/postman_collection.json` into Postman for ready-to-run
+API testing. Import `fx_engine/postman_environment.json` for local
+environment variables.
 
 ---
 
 ## Key Design Decisions
 
 **PostgreSQL over SQLite** — NUMERIC types for exact decimal storage,
-SELECT FOR UPDATE for row-level locking across multiple workers. SQLite
-cannot handle concurrent writes in production.
+SELECT FOR UPDATE for row-level locking across multiple workers.
 
 **with_for_update()** — Row-level DB lock on quote and balance rows
-during execute. Concurrent requests serialise correctly. Proven by
-test_concurrent_executions_exactly_one_succeeds — 10 threads, exactly
-1 success, 9 failures.
+during execute. Proven by test_concurrent_executions_exactly_one_succeeds
+— 10 threads, exactly 1 success, 9 failures.
 
-**Quoted rate honoured** — `quote.rate` stored at generation time,
-read at execution. Never re-fetched. Financial contract integrity.
+**Quoted rate honoured** — `quote.rate` stored at generation, read at
+execution. Never re-fetched. Financial contract integrity.
 
 **Atomic two-leg execution** — all steps in one SQLAlchemy session.
 Rollback on any failure — nothing is half-done.
 
-**Idempotency via header** — `Idempotency-Key` request header. Checked
-and written atomically within the same session as execution.
+**Idempotency via header** — `Idempotency-Key` request header, industry
+standard (Stripe, M-Pesa). Checked and written atomically within the
+same session as execution.
 
-**Secrets via .env** — No credentials in committed files. All secrets
-loaded via python-dotenv. Missing DATABASE_URL raises RuntimeError
-immediately.
+**Prometheus /metrics** — standalone metrics.py avoids circular imports.
+Counters increment on every quote, execution, idempotency hit, and rate
+refresh/failure.
+
+**Secrets via .env** — No credentials in committed files. Missing
+DATABASE_URL raises RuntimeError immediately.
+
+**Docker** — same PostgreSQL 16 image locally and in production.
+Healthcheck ensures DB is ready before API starts.
 
 ---
 
 ## Known Limitations
 
 - No authentication or authorisation (out of scope per assignment)
-- /metrics not implemented — structured logs used for observability
 - No rate limiting on execute endpoint
-- Quote TTL is 60 seconds — adjust QUOTE_TTL_SECONDS in fx_service.py
+- No background rate refresh — rates refresh on startup and manual POST /rates/refresh
+- List endpoints have no pagination
 
 ---
 
 ## What I Would Do With Another Day
 
-- Prometheus /metrics endpoint (quote count, execution latency, rate age)
+- APScheduler for automatic rate refresh every 30 minutes
 - Circuit breaker on exchangeratesapi.io with exponential backoff
-- APScheduler to auto-refresh rates every 30 minutes
 - Async SQLAlchemy (AsyncSession) for higher throughput
-- Property-based tests with Hypothesis over random amounts and all pairs
 - Rate limiting on execute (token bucket per customer_id)
+- Pagination on list endpoints
 
 ---
 
 ## Estimated Time
 
-- Wall clock: ~14 hours across 2 days
-- Active engagement: ~8 hours
+- Wall clock: ~24hrs across 2days
+- Active engagement: ~10 hours
