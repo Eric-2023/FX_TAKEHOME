@@ -26,3 +26,4 @@ env/
 
 # Pytest
 .pytest_cache/
+fx_engine/*.log

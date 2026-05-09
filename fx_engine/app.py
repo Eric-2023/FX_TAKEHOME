@@ -25,9 +25,14 @@ from routes import (
     create_rates_router,
 )
 
+# ── Logging — terminal + file ─────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),                    # terminal
+        logging.FileHandler("fx_engine.log"),       # file — gitignored
+    ]
 )
 log = logging.getLogger(__name__)
 
