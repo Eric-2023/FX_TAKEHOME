@@ -36,12 +36,15 @@ via ${VAR} substitution — no hardcoded secrets in docker-compose.yml.
 ```
 app.py → routes/ → services/ → models/ + utils/ + db.py
          schemas/
+         metrics.py (standalone — no circular import risk)
 ```
 Each layer has one responsibility. Models own data shapes and
 relationships. Schemas own request/response validation. Services own
 business logic. Routes own HTTP handling. Nothing imports backwards.
 
 Services injected into route factories — no circular imports.
+Prometheus metrics live in a standalone metrics.py at the top level —
+no circular import risk from routes or services importing each other.
 
 ### with_for_update() for concurrency
 `session.query(Quote).with_for_update().first()` acquires a
@@ -63,13 +66,20 @@ caused precision loss on large amount multiplications.
 The assignment suggests exchangeratesapi.io. Free tier uses EUR as base
 currency — all pairs derived from EUR base rates. Seed rates loaded on
 startup as fallback if live fetch fails. Last-updated timestamp tracked
-with 1-hour staleness threshold.
+with 1-hour staleness threshold. HTTP 429 (rate limit) handled gracefully
+— seed rates served and failure captured in Prometheus counter.
 
 ### Secrets via .env
 All credentials (DATABASE_URL, EXCHANGERATES_API_KEY, POSTGRES_PASSWORD)
 loaded from .env via python-dotenv. docker-compose.yml uses ${VAR}
 substitution. Missing DATABASE_URL raises RuntimeError immediately rather
 than falling back to a hardcoded default — fail fast, never silently.
+
+### Prometheus /metrics endpoint
+Standalone metrics.py module at top level — no circular imports.
+Counters: quotes_generated, quotes_executed, idempotent_hits,
+rate_refreshes, rate_refresh_failures. Gauge: rates_stale.
+Exposed at GET /metrics in Prometheus text format.
 
 ---
 
@@ -84,6 +94,7 @@ than falling back to a hardcoded default — fail fast, never silently.
 - Catching the float arithmetic bug (same as planted_bugs Bug 4)
 - Security review — identified hardcoded credentials in docker-compose,
   alembic.ini, and db.py and moved all secrets to .env
+- Catching circular import when metrics module was placed inside routes/
 
 ### Delegated
 - Boilerplate ORM column definitions (reviewed before use)
@@ -101,6 +112,8 @@ than falling back to a hardcoded default — fail fast, never silently.
   session closed — fixed with session.refresh() + session.expunge()
 - AI hardcoded credentials in docker-compose.yml and alembic.ini —
   moved all secrets to .env with python-dotenv
+- AI placed Prometheus counters inside routes/metrics.py causing a
+  circular import — moved to standalone metrics.py at top level
 
 ### What I did not trust without verifying
 - All financial calculations — tested with large and small amounts,
@@ -108,6 +121,8 @@ than falling back to a hardcoded default — fail fast, never silently.
 - Concurrency — ran 10-thread test, verified exactly one success
 - Idempotency — verified balance debited exactly once under concurrent retry
 - Secret exposure — ran grep across all committed files for credentials
+- Hypothesis property-based tests — let them run and caught a real edge
+  case (minimum amount rounds to zero minor units in destination currency)
 
 ### One thing the AI got wrong
 The AI generated `session.cursor()` for the health check DB ping — a
@@ -123,15 +138,16 @@ interaction code without running it.
 
 ### Current limitations
 - No authentication or authorisation (out of scope per assignment)
-- /metrics endpoint not implemented — structured logs used instead
 - No rate limiting on execute endpoint
 - Tests use TRUNCATE to clear data between runs — production uses
   `alembic upgrade head`
+- Rate refresh only happens on startup and manual POST /rates/refresh —
+  no background scheduler yet
+- List endpoints have no pagination
 
 ### With another day
-- Add Prometheus /metrics endpoint (quote count, execution count, rate age)
-- Add circuit breaker on exchangeratesapi.io with exponential backoff
-- Async SQLAlchemy (AsyncSession) for better throughput under load
-- Property-based tests with Hypothesis over random amounts and all pairs
-- Rate limiting on execute (token bucket per customer_id)
 - APScheduler to auto-refresh rates every 30 minutes
+- Circuit breaker on exchangeratesapi.io with exponential backoff
+- Async SQLAlchemy (AsyncSession) for better throughput under load
+- Rate limiting on execute (token bucket per customer_id)
+- Pagination on list endpoints (GET /customers, GET /quotes, GET /transactions)
